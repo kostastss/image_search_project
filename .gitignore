@@ -66,3 +66,13 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Project Output & Build Folders
+bin/
+build/
+*.o
+
+# Datasets
+data/
+*.ppm
+*.jpg
