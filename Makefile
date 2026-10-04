@@ -10,8 +10,8 @@ BIN_DIR = bin
 TARGET = $(BIN_DIR)/search-hp
 
 # Ρητή δήλωση των αρχείων αντί για wildcard
-SRCS = src/main.cpp src/utils.cpp
-OBJS = build/main.o build/utils.o
+SRCS = src/main.cpp src/utils.cpp src/dataset.cpp
+OBJS = build/main.o build/utils.o build/dataset.o
 
 all: directories $(TARGET)
 
