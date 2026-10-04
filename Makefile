@@ -1,0 +1,31 @@
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -Iinc `pkg-config --cflags opencv4`
+LDFLAGS = `pkg-config --libs opencv4`
+
+SRC_DIR = src
+INC_DIR = inc
+BUILD_DIR = build
+BIN_DIR = bin
+
+TARGET = $(BIN_DIR)/search-hp
+
+# Ρητή δήλωση των αρχείων αντί για wildcard
+SRCS = src/main.cpp src/utils.cpp
+OBJS = build/main.o build/utils.o
+
+all: directories $(TARGET)
+
+directories:
+	mkdir -p build
+	mkdir -p bin
+
+$(TARGET): $(OBJS)
+	$(CXX) $(OBJS) -o $@ $(LDFLAGS)
+
+build/%.o: src/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o$@
+
+clean:
+	rm -rf build bin
+
+.PHONY: all clean directories
