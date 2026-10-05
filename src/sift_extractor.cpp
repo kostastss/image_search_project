@@ -1,4 +1,4 @@
-#include "sift_extractor.h"
+#include "../inc/sift_extractor.h"
 #include <iostream>
 #include <random>
 #include <algorithm>
@@ -20,7 +20,7 @@ bool SiftExtractor::extract_descriptors(const std::string& image_path, std::vect
     cv::Mat descriptors;
     
     // Εξαγωγή SIFT keypoints και descriptors
-    sift->detectAndCompute(img, noArray(), keypoints, descriptors);
+    sift->detectAndCompute(img, cv::noArray(), keypoints, descriptors);
 
     if (descriptors.empty()) {
         return false; // Αν δεν βρεθούν descriptors
