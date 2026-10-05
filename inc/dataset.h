@@ -11,8 +11,8 @@ struct Sequence {
 
 struct Dataset {
     std::vector<Sequence> train_seqs;
-    std::vector<Sequence> val_seqs;
-    std::vector<Sequence> test_seqs;
+    std::vector<Sequence> validation_seqs; 
+    std::vector<Sequence> test_seqs;      
 };
 
 bool load_hpatches_splits(const std::string& split_file, Dataset& dataset);
