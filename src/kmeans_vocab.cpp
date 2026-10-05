@@ -60,7 +60,7 @@ cv::Mat KMeansVocab::compute_bow_histogram(const std::vector<cv::Mat>& image_des
     }
 
     // Κανονικοποίηση ιστογράμματος (L2 norm) για καλύτερα αποτελέσματα ανάκτησης
-    cv::normalize(histogram, histogram, 1, 0, cv::NORM_L2);
-
+    cv::normalize(histogram, histogram, 1, 0, cv::NORM_L1);
+    
     return histogram;
 }
