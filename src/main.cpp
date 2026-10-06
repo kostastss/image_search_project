@@ -10,12 +10,11 @@
 #include "../inc/search_engine.h"
 #include "../inc/lsh.h" // Προσθήκη της κεφαλίδας για το LSH
 #include "../inc/hypercube.h" // <-- Προσθήκη για τον Υπερκύβο
+#include "../inc/ivfflat.h" // <-- Προσθήκη για το IVF-Flat
 
 int main(int argc, char* argv[]) {
     Config config;
-    if (!parse_args(argc, argv, config)) {
-        return 1;
-    }
+    if (!parse_args(argc, argv, config)) return 1;
 
     Dataset dataset;
     if (!load_hpatches_splits(config.split_file, dataset)) return 1;
@@ -42,10 +41,10 @@ int main(int argc, char* argv[]) {
 
     const std::vector<Sequence>* target_set = (config.query_set == "test") ? &dataset.test_seqs : &dataset.validation_seqs;
 
-    // === ΝΕΟΣ ΚΩΔΙΚΑΣ (ΚΕΦΑΛΑΙΟ III - ANN) ===
     SearchEngine exact_engine;
-    LSH lsh_engine(5, 10, config.vocab_size); // L=5 πίνακες, k=10 bits ανά πίνακα
-    Hypercube hc_engine(10, 20, 500, config.vocab_size); // k=10, probes=20, max_candidates=500
+    LSH lsh_engine(5, 10, config.vocab_size); 
+    Hypercube hc_engine(10, 20, 500, config.vocab_size); 
+    IVFFlat ivf_engine(40, 4); // <-- 40 Clusters (Kc), ψάχνουμε στα 4 πιο κοντινά (W)
     
     std::cout << "\n[Search] Χτίσιμο βάσης δεδομένων..." << std::endl;
     for (const auto& seq : *target_set) {
@@ -57,20 +56,17 @@ int main(int argc, char* argv[]) {
             if (sift_ext.extract_descriptors(img_path, descs)) {
                 cv::Mat hist = vocab.compute_bow_histogram(descs);
                 
-                // Δυναμική επιλογή δομής για προσθήκη
                 if (config.method == "exact") exact_engine.add_to_database(img_id, hist);
                 else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
                 else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
+                else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist); // <-- Νέο
             }
         }
     }
 
-    // Προσθήκη distractors από το MIRFlickr-25K
     if (config.D > 0) {
         std::cout << "[Search] Προσθήκη " << config.D << " εικόνων MIRFlickr στη βάση..." << std::endl;
-        int added_mir = 0;
-        int img_idx = 1;
-        
+        int added_mir = 0, img_idx = 1;
         while (added_mir < config.D) {
             std::string img_id = "im" + std::to_string(img_idx) + ".jpg";
             std::string img_path = config.mirflickr_dir + "/" + img_id;
@@ -79,10 +75,10 @@ int main(int argc, char* argv[]) {
             if (sift_ext.extract_descriptors(img_path, descs) && !descs.empty()) {
                 cv::Mat hist = vocab.compute_bow_histogram(descs);
                 
-                // Προσθήκη στην κατάλληλη μηχανή
                 if (config.method == "exact") exact_engine.add_to_database(img_id, hist);
                 else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
                 else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
+                else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist); // <-- Νέο
                 
                 added_mir++;
                 if (added_mir % 1000 == 0) std::cout << "  Προστέθηκαν " << added_mir << "/" << config.D << " distractors..." << std::endl;
@@ -92,11 +88,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // <-- ΣΗΜΑΝΤΙΚΟ: Το IVF-Flat απαιτεί clustering ΑΦΟΥ φορτωθεί η βάση!
+    if (config.method == "ivfflat") {
+        ivf_engine.build_index();
+    }
+
     std::ofstream out_file(config.output_file);
-    out_file << "Method: " << config.method << "\n"; // Πιο γενική εκτύπωση της μεθόδου
+    out_file << "Method: " << config.method << "\n"; 
 
     double total_recall5 = 0.0, total_recall10 = 0.0, total_ap10 = 0.0, total_time = 0.0;
-    long long total_candidates_checked = 0; // Για να δούμε πόσα γλιτώνει το LSH/Hypercube
+    long long total_candidates_checked = 0; 
     int num_queries = target_set->size();
 
     std::cout << "[Search] Εκτέλεση queries..." << std::endl;
@@ -112,14 +113,15 @@ int main(int argc, char* argv[]) {
         std::vector<SearchResult> results;
         int checked_cands = 0;
 
-        // Εκτέλεση Αναζήτησης ανάλογα με τη μέθοδο
         if (config.method == "exact") {
             results = exact_engine.exact_search(query_hist, 10);
-            checked_cands = (115 + config.D); // Στο exact ελέγχονται πάντα όλοι
+            checked_cands = (115 + config.D); 
         } else if (config.method == "lsh") {
             results = lsh_engine.search(query_hist, 10, checked_cands);
         } else if (config.method == "hypercube") {
             results = hc_engine.search(query_hist, 10, checked_cands);
+        } else if (config.method == "ivfflat") {
+            results = ivf_engine.search(query_hist, 10, checked_cands); // <-- Νέο
         }
         
         auto end = std::chrono::high_resolution_clock::now();
@@ -129,8 +131,7 @@ int main(int argc, char* argv[]) {
 
         out_file << "\nQuery: " << seq.name << "\n";
         
-        int relevant_found = 0;
-        int relevant_at_5 = 0;
+        int relevant_found = 0, relevant_at_5 = 0;
         double ap10 = 0.0;
         
         for (size_t j = 0; j < results.size(); ++j) {
