@@ -11,6 +11,7 @@
 #include "../inc/lsh.h" // Προσθήκη της κεφαλίδας για το LSH
 #include "../inc/hypercube.h" // <-- Προσθήκη για τον Υπερκύβο
 #include "../inc/ivfflat.h" // <-- Προσθήκη για το IVF-Flat
+#include "../inc/ivfpq.h" // <-- Προσθήκη για το Product Quantization
 
 int main(int argc, char* argv[]) {
     Config config;
@@ -41,10 +42,12 @@ int main(int argc, char* argv[]) {
 
     const std::vector<Sequence>* target_set = (config.query_set == "test") ? &dataset.test_seqs : &dataset.validation_seqs;
 
+    // Αρχικοποίηση όλων των μηχανών
     SearchEngine exact_engine;
     LSH lsh_engine(5, 10, config.vocab_size); 
     Hypercube hc_engine(10, 20, 500, config.vocab_size); 
-    IVFFlat ivf_engine(40, 4); // <-- 40 Clusters (Kc), ψάχνουμε στα 4 πιο κοντινά (W)
+    IVFFlat ivf_engine(40, 4); 
+    IVFPQ ivfpq_engine(40, 4, 8, 256, config.vocab_size); // <-- Νέο: 40 clusters, W=4, m=8, k_sub=256
     
     std::cout << "\n[Search] Χτίσιμο βάσης δεδομένων..." << std::endl;
     for (const auto& seq : *target_set) {
@@ -56,10 +59,12 @@ int main(int argc, char* argv[]) {
             if (sift_ext.extract_descriptors(img_path, descs)) {
                 cv::Mat hist = vocab.compute_bow_histogram(descs);
                 
+                // Προσθήκη στην κατάλληλη μηχανή
                 if (config.method == "exact") exact_engine.add_to_database(img_id, hist);
                 else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
                 else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
-                else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist); // <-- Νέο
+                else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist);
+                else if (config.method == "ivfpq") ivfpq_engine.add_to_database(img_id, hist); // <-- Νέο
             }
         }
     }
@@ -78,7 +83,8 @@ int main(int argc, char* argv[]) {
                 if (config.method == "exact") exact_engine.add_to_database(img_id, hist);
                 else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
                 else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
-                else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist); // <-- Νέο
+                else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist);
+                else if (config.method == "ivfpq") ivfpq_engine.add_to_database(img_id, hist); // <-- Νέο
                 
                 added_mir++;
                 if (added_mir % 1000 == 0) std::cout << "  Προστέθηκαν " << added_mir << "/" << config.D << " distractors..." << std::endl;
@@ -88,9 +94,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // <-- ΣΗΜΑΝΤΙΚΟ: Το IVF-Flat απαιτεί clustering ΑΦΟΥ φορτωθεί η βάση!
+    // Οι δομές IVF απαιτούν clustering ΑΦΟΥ μπουν τα δεδομένα
     if (config.method == "ivfflat") {
         ivf_engine.build_index();
+    } else if (config.method == "ivfpq") { // <-- Νέο
+        ivfpq_engine.build_index();
     }
 
     std::ofstream out_file(config.output_file);
@@ -113,6 +121,7 @@ int main(int argc, char* argv[]) {
         std::vector<SearchResult> results;
         int checked_cands = 0;
 
+        // Εκτέλεση Αναζήτησης
         if (config.method == "exact") {
             results = exact_engine.exact_search(query_hist, 10);
             checked_cands = (115 + config.D); 
@@ -121,7 +130,9 @@ int main(int argc, char* argv[]) {
         } else if (config.method == "hypercube") {
             results = hc_engine.search(query_hist, 10, checked_cands);
         } else if (config.method == "ivfflat") {
-            results = ivf_engine.search(query_hist, 10, checked_cands); // <-- Νέο
+            results = ivf_engine.search(query_hist, 10, checked_cands);
+        } else if (config.method == "ivfpq") { // <-- Νέο
+            results = ivfpq_engine.search(query_hist, 10, checked_cands);
         }
         
         auto end = std::chrono::high_resolution_clock::now();
