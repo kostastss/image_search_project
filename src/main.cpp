@@ -8,6 +8,8 @@
 #include "../inc/sift_extractor.h"
 #include "../inc/kmeans_vocab.h"
 #include "../inc/search_engine.h"
+#include "../inc/lsh.h" // Προσθήκη της κεφαλίδας για το LSH
+#include "../inc/hypercube.h" // <-- Προσθήκη για τον Υπερκύβο
 
 int main(int argc, char* argv[]) {
     Config config;
@@ -15,13 +17,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 1. Φόρτωση Dataset
     Dataset dataset;
-    if (!load_hpatches_splits(config.split_file, dataset)) {
-        return 1;
-    }
+    if (!load_hpatches_splits(config.split_file, dataset)) return 1;
 
-    // 2. SIFT Extractor
     SiftExtractor sift_ext;
     std::vector<std::vector<cv::Mat>> train_img_descriptors;
     
@@ -36,23 +34,19 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    int max_S = 500; // Όπως προτείνει η εκφώνηση
+    int max_S = config.max_S; 
     std::vector<cv::Mat> pooled_train_descs = sift_ext.sample_descriptors(train_img_descriptors, max_S, config.seed);
     
     KMeansVocab vocab(config.vocab_size);
-    if (!vocab.train(pooled_train_descs)) {
-        return 1;
-    }
+    if (!vocab.train(pooled_train_descs)) return 1;
 
-    // 3. Επιλογή Συνόλου για Αναζήτηση (Validation ή Test)
-    const std::vector<Sequence>* target_set = &dataset.validation_seqs;
-    if (config.query_set == "test") {
-        target_set = &dataset.test_seqs;
-    }
+    const std::vector<Sequence>* target_set = (config.query_set == "test") ? &dataset.test_seqs : &dataset.validation_seqs;
 
-    SearchEngine engine;
+    // === ΝΕΟΣ ΚΩΔΙΚΑΣ (ΚΕΦΑΛΑΙΟ III - ANN) ===
+    SearchEngine exact_engine;
+    LSH lsh_engine(5, 10, config.vocab_size); // L=5 πίνακες, k=10 bits ανά πίνακα
+    Hypercube hc_engine(10, 20, 500, config.vocab_size); // k=10, probes=20, max_candidates=500
     
-    // Κατασκευή της Βάσης Δεδομένων (εικόνες 2-6 από τις ακολουθίες του συνόλου)
     std::cout << "\n[Search] Χτίσιμο βάσης δεδομένων..." << std::endl;
     for (const auto& seq : *target_set) {
         for (int i = 2; i <= 6; ++i) {
@@ -62,27 +56,51 @@ int main(int argc, char* argv[]) {
             std::vector<cv::Mat> descs;
             if (sift_ext.extract_descriptors(img_path, descs)) {
                 cv::Mat hist = vocab.compute_bow_histogram(descs);
-                engine.add_to_database(img_id, hist);
+                
+                // Δυναμική επιλογή δομής για προσθήκη
+                if (config.method == "exact") exact_engine.add_to_database(img_id, hist);
+                else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
+                else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
             }
         }
     }
 
-    // Εδώ μελλοντικά θα προσθέσουμε και τις MIRFlickr εικόνες στη βάση (engine.add_to_database)
-
-    std::ofstream out_file(config.output_file);
-    if (!out_file.is_open()) {
-        std::cerr << "Σφάλμα δημιουργίας αρχείου εξόδου: " << config.output_file << std::endl;
-        return 1;
+    // Προσθήκη distractors από το MIRFlickr-25K
+    if (config.D > 0) {
+        std::cout << "[Search] Προσθήκη " << config.D << " εικόνων MIRFlickr στη βάση..." << std::endl;
+        int added_mir = 0;
+        int img_idx = 1;
+        
+        while (added_mir < config.D) {
+            std::string img_id = "im" + std::to_string(img_idx) + ".jpg";
+            std::string img_path = config.mirflickr_dir + "/" + img_id;
+            
+            std::vector<cv::Mat> descs;
+            if (sift_ext.extract_descriptors(img_path, descs) && !descs.empty()) {
+                cv::Mat hist = vocab.compute_bow_histogram(descs);
+                
+                // Προσθήκη στην κατάλληλη μηχανή
+                if (config.method == "exact") exact_engine.add_to_database(img_id, hist);
+                else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
+                else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
+                
+                added_mir++;
+                if (added_mir % 1000 == 0) std::cout << "  Προστέθηκαν " << added_mir << "/" << config.D << " distractors..." << std::endl;
+            }
+            img_idx++;
+            if (img_idx > 25000 && added_mir < config.D) break;
+        }
     }
 
-    out_file << (config.method == "exact" ? "Exact Search\n" : config.method + "\n");
+    std::ofstream out_file(config.output_file);
+    out_file << "Method: " << config.method << "\n"; // Πιο γενική εκτύπωση της μεθόδου
 
     double total_recall5 = 0.0, total_recall10 = 0.0, total_ap10 = 0.0, total_time = 0.0;
+    long long total_candidates_checked = 0; // Για να δούμε πόσα γλιτώνει το LSH/Hypercube
     int num_queries = target_set->size();
 
     std::cout << "[Search] Εκτέλεση queries..." << std::endl;
     
-    // 4. Εκτέλεση Αναζήτησης για κάθε Query (εικόνα 1)
     for (const auto& seq : *target_set) {
         std::string query_path = config.hpatches_dir + "/" + seq.name + "/1.ppm";
         std::vector<cv::Mat> query_descs;
@@ -91,34 +109,42 @@ int main(int argc, char* argv[]) {
 
         auto start = std::chrono::high_resolution_clock::now();
         
-        // Exact Search
-        std::vector<SearchResult> results = engine.exact_search(query_hist, 10);
+        std::vector<SearchResult> results;
+        int checked_cands = 0;
+
+        // Εκτέλεση Αναζήτησης ανάλογα με τη μέθοδο
+        if (config.method == "exact") {
+            results = exact_engine.exact_search(query_hist, 10);
+            checked_cands = (115 + config.D); // Στο exact ελέγχονται πάντα όλοι
+        } else if (config.method == "lsh") {
+            results = lsh_engine.search(query_hist, 10, checked_cands);
+        } else if (config.method == "hypercube") {
+            results = hc_engine.search(query_hist, 10, checked_cands);
+        }
         
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = end - start;
         total_time += elapsed.count();
+        total_candidates_checked += checked_cands;
 
         out_file << "\nQuery: " << seq.name << "\n";
         
-        // Υπολογισμός Μετρικών για το Query
         int relevant_found = 0;
         int relevant_at_5 = 0;
         double ap10 = 0.0;
         
         for (size_t j = 0; j < results.size(); ++j) {
             out_file << "Rank-" << (j + 1) << ": " << results[j].image_id << "\n";
-            
-            // Μια εικόνα είναι σχετική αν ξεκινάει με το όνομα της ακολουθίας (π.χ. "v_bird/")
             if (results[j].image_id.find(seq.name + "/") == 0) {
                 relevant_found++;
                 if (j < 5) relevant_at_5++;
-                ap10 += (double)relevant_found / (j + 1); //
+                ap10 += (double)relevant_found / (j + 1);
             }
         }
         
-        double recall5 = (double)relevant_at_5 / 5.0; // 5 είναι το σύνολο των σχετικών εικόνων
+        double recall5 = (double)relevant_at_5 / 5.0; 
         double recall10 = (double)relevant_found / 5.0;
-        ap10 = ap10 / 5.0; //
+        ap10 = ap10 / 5.0; 
 
         out_file << "Recall@5: " << std::fixed << std::setprecision(4) << recall5 << "\n";
         out_file << "Recall@10: " << recall10 << "\n";
@@ -129,11 +155,11 @@ int main(int argc, char* argv[]) {
         total_ap10 += ap10;
     }
 
-    // 5. Συνολικά Αποτελέσματα
     out_file << "\nMean Recall@5: " << std::fixed << std::setprecision(4) << (total_recall5 / num_queries) << "\n";
     out_file << "Mean Recall@10: " << (total_recall10 / num_queries) << "\n";
-    out_file << "mAP@10: " << (total_ap10 / num_queries) << "\n"; //
-    out_file << "Average query time: " << (total_time / num_queries) << " ms\n"; //
+    out_file << "mAP@10: " << (total_ap10 / num_queries) << "\n";
+    out_file << "Average query time: " << (total_time / num_queries) << " ms\n";
+    out_file << "Average candidates checked per query: " << (total_candidates_checked / num_queries) << " / " << (115 + config.D) << "\n";
 
     out_file.close();
     std::cout << "[Search] Ολοκληρώθηκε! Τα αποτελέσματα αποθηκεύτηκαν στο " << config.output_file << std::endl;
