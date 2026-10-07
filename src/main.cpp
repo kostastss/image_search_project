@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
     LSH lsh_engine(5, 10, config.vocab_size); 
     Hypercube hc_engine(10, 20, 500, config.vocab_size); 
     IVFFlat ivf_engine(40, 4); 
-    IVFPQ ivfpq_engine(40, 4, 8, 256, config.vocab_size); // <-- Νέο: 40 clusters, W=4, m=8, k_sub=256
+    IVFPQ ivfpq_engine(40, 4, 8, 256, config.vocab_size);
     
     std::cout << "\n[Search] Χτίσιμο βάσης δεδομένων..." << std::endl;
     for (const auto& seq : *target_set) {
@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
                 else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
                 else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
                 else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist);
-                else if (config.method == "ivfpq") ivfpq_engine.add_to_database(img_id, hist); // <-- Νέο
+                else if (config.method == "ivfpq") ivfpq_engine.add_to_database(img_id, hist);
             }
         }
     }
@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
                 else if (config.method == "lsh") lsh_engine.add_to_database(img_id, hist);
                 else if (config.method == "hypercube") hc_engine.add_to_database(img_id, hist);
                 else if (config.method == "ivfflat") ivf_engine.add_to_database(img_id, hist);
-                else if (config.method == "ivfpq") ivfpq_engine.add_to_database(img_id, hist); // <-- Νέο
+                else if (config.method == "ivfpq") ivfpq_engine.add_to_database(img_id, hist);
                 
                 added_mir++;
                 if (added_mir % 1000 == 0) std::cout << "  Προστέθηκαν " << added_mir << "/" << config.D << " distractors..." << std::endl;
@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
     // Οι δομές IVF απαιτούν clustering ΑΦΟΥ μπουν τα δεδομένα
     if (config.method == "ivfflat") {
         ivf_engine.build_index();
-    } else if (config.method == "ivfpq") { // <-- Νέο
+    } else if (config.method == "ivfpq") {
         ivfpq_engine.build_index();
     }
 
@@ -105,8 +105,12 @@ int main(int argc, char* argv[]) {
     out_file << "Method: " << config.method << "\n"; 
 
     double total_recall5 = 0.0, total_recall10 = 0.0, total_ap10 = 0.0, total_time = 0.0;
-    long long total_candidates_checked = 0; 
+    double total_recall5_i = 0.0, total_recall10_i = 0.0, total_ap10_i = 0.0;
+    double total_recall5_v = 0.0, total_recall10_v = 0.0, total_ap10_v = 0.0;
+    
     int num_queries = target_set->size();
+    int num_queries_i = 0, num_queries_v = 0;
+    long long total_candidates_checked = 0;
 
     std::cout << "[Search] Εκτέλεση queries..." << std::endl;
     
@@ -131,7 +135,7 @@ int main(int argc, char* argv[]) {
             results = hc_engine.search(query_hist, 10, checked_cands);
         } else if (config.method == "ivfflat") {
             results = ivf_engine.search(query_hist, 10, checked_cands);
-        } else if (config.method == "ivfpq") { // <-- Νέο
+        } else if (config.method == "ivfpq") {
             results = ivfpq_engine.search(query_hist, 10, checked_cands);
         }
         
@@ -162,9 +166,23 @@ int main(int argc, char* argv[]) {
         out_file << "Recall@10: " << recall10 << "\n";
         out_file << "AP@10: " << ap10 << "\n";
 
+        // Συνολικές μετρικές
         total_recall5 += recall5;
         total_recall10 += recall10;
         total_ap10 += ap10;
+
+        // Διαχωρισμός ανάλογα με το πρώτο γράμμα της ακολουθίας (Illumination vs Viewpoint)
+        if (seq.name[0] == 'i') {
+            total_recall5_i += recall5;
+            total_recall10_i += recall10;
+            total_ap10_i += ap10;
+            num_queries_i++;
+        } else if (seq.name[0] == 'v') {
+            total_recall5_v += recall5;
+            total_recall10_v += recall10;
+            total_ap10_v += ap10;
+            num_queries_v++;
+        }
     }
 
     out_file << "\nMean Recall@5: " << std::fixed << std::setprecision(4) << (total_recall5 / num_queries) << "\n";
@@ -172,6 +190,15 @@ int main(int argc, char* argv[]) {
     out_file << "mAP@10: " << (total_ap10 / num_queries) << "\n";
     out_file << "Average query time: " << (total_time / num_queries) << " ms\n";
     out_file << "Average candidates checked per query: " << (total_candidates_checked / num_queries) << " / " << (115 + config.D) << "\n";
+
+    // Προσθήκη των ξεχωριστών στατιστικών για διευκόλυνση στην αναφορά
+    out_file << "\n--- Extra Stats for Report ---\n";
+    if (num_queries_i > 0) {
+        out_file << "Illumination (i_) - Mean Recall@5: " << (total_recall5_i / num_queries_i) << ", Mean Recall@10: " << (total_recall10_i / num_queries_i) << ", mAP@10: " << (total_ap10_i / num_queries_i) << "\n";
+    }
+    if (num_queries_v > 0) {
+        out_file << "Viewpoint (v_)    - Mean Recall@5: " << (total_recall5_v / num_queries_v) << ", Mean Recall@10: " << (total_recall10_v / num_queries_v) << ", mAP@10: " << (total_ap10_v / num_queries_v) << "\n";
+    }
 
     out_file.close();
     std::cout << "[Search] Ολοκληρώθηκε! Τα αποτελέσματα αποθηκεύτηκαν στο " << config.output_file << std::endl;
