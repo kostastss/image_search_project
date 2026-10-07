@@ -20,3 +20,25 @@
 Απαιτείται μεταγλωττιστής (compiler) με υποστήριξη C++17 και η βιβλιοθήκη OpenCV 4. Στον ριζικό κατάλογο του project, εκτελέστε:
 ```bash
 make# image_search_project
+
+Το τελικό εκτελέσιμο αποθηκεύεται στη διαδρομή bin/search-hp.
+
+Το πρόγραμμα εκτελείται μέσω της γραμμής εντολών. Παράδειγμα εκτέλεσης για τη μέθοδο IVF-Flat με 10.000 distractors στο test set:
+    ./bin/search-hp -hp data/hpatches -mir data/mir -split data/split.txt -vocab 256 -ivfflat -D 10000 -set test -o output_ivfflat_10000.txt
+
+Βασικές Κοινές Παράμετροι
+-hp <path>: Διαδρομή του καταλόγου HPatches.
+
+-mir <path>: Διαδρομή του καταλόγου MIRFlickr-25K.
+
+-split <file>: Αρχείο με τον διαχωρισμό (train, validation, test).
+
+-vocab <int>: Αριθμός K των κέντρων του k-means (προεπιλογή: 256).
+
+-D <int>: Πλήθος εικόνων MIRFlickr που θα προστεθούν ως distractors (π.χ. 1000, 5000, 10000, 25000).
+
+-set <validation|test>: Επιλογή του συνόλου queries.
+
+-o <file>: Όνομα αρχείου εξόδου (αποθήκευση αποτελεσμάτων).
+
+Επιλογή μεθόδου αναζήτησης (πρέπει να δοθεί μία): -exact, -lsh, -hypercube, -ivfflat, -ivfpq.
